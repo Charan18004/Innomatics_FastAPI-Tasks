@@ -1,109 +1,150 @@
 from fastapi import FastAPI
+from pydantic import BaseModel, Field
+from typing import Optional, List
 
 app = FastAPI()
 
-products = [
-    {"id": 1, "name": "Wireless Mouse", "price": 599, "category": "Electronics", "in_stock": True},
-    {"id": 2, "name": "Notebook", "price": 120, "category": "Stationery", "in_stock": True},
-    {"id": 3, "name": "Pen Set", "price": 49, "category": "Stationery", "in_stock": True},
-    {"id": 4, "name": "USB Cable", "price": 199, "category": "Electronics", "in_stock": False},
 
-    # Added products (Question 1)
-    {"id": 5, "name": "Laptop Stand", "price": 899, "category": "Electronics", "in_stock": True},
-    {"id": 6, "name": "Mechanical Keyboard", "price": 2499, "category": "Electronics", "in_stock": True},
-    {"id": 7, "name": "Webcam", "price": 1499, "category": "Electronics", "in_stock": False}
+#  Product data
+products = [
+    {"id": 1, "name": "Laptop", "price": 50000, "category": "electronics", "in_stock": True},
+    {"id": 2, "name": "Wireless Mouse", "price": 499, "category": "electronics", "in_stock": True},
+    {"id": 3, "name": "USB Hub", "price": 799, "category": "electronics", "in_stock": False},
+    {"id": 4, "name": "Notebook", "price": 50, "category": "stationery", "in_stock": True},
 ]
 
+#  Feedback storage (OUTSIDE model)
+feedback = []
 
 @app.get("/products")
-def get_products():
-    return {
-        "products": products,
-        "total": len(products)
-    }
+def get_all_products():
+    return products
 
-@app.get("/products/category/{category_name}")
-def get_products_by_category(category_name: str):
+#  Pydantic model
+class CustomerFeedback(BaseModel):
+    customer_name: str = Field(..., min_length=2, max_length=100)
+    product_id: int = Field(..., gt=0)
+    rating: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = Field(None, max_length=300)
 
-    filtered_products = []
+#  Each item in order
+class OrderItem(BaseModel):
+    product_id: int = Field(..., gt=0)
+    quantity: int = Field(..., ge=1, le=50)
 
+#  Bulk order request
+class BulkOrder(BaseModel):
+    company_name: str = Field(..., min_length=2)
+    contact_email: str = Field(..., min_length=5)
+    items: List[OrderItem] = Field(..., min_items=1)    
+
+
+#  Filter endpoint
+@app.get("/products/filter")
+def filter_products(category: str = None, max_price: int = None, min_price: int = None):
+    filtered_products = products
+
+    if category:
+        filtered_products = [p for p in filtered_products if p["category"] == category]
+
+    if min_price is not None:
+        filtered_products = [p for p in filtered_products if p["price"] >= min_price]
+
+    if max_price is not None:
+        filtered_products = [p for p in filtered_products if p["price"] <= max_price]
+
+    return filtered_products
+
+
+#  Price endpoint
+@app.get("/products/{product_id}/price")
+def get_product_price(product_id: int):
     for product in products:
-        if product["category"].lower() == category_name.lower():
-            filtered_products.append(product)
+        if product["id"] == product_id:
+            return {"name": product["name"], "price": product["price"]}
+    return {"error": "Product not found"}
 
-    if len(filtered_products) == 0:
-        return {"error": "No products found in this category"}
 
+#  Feedback endpoint
+@app.post("/feedback")
+def submit_feedback(data: CustomerFeedback):
+    feedback.append(data.dict())  # use data.model_dump() if Pydantic v2
     return {
-        "category": category_name,
-        "products": filtered_products
+        "message": "Feedback submitted successfully",
+        "feedback": data.dict(),
+        "total_feedback": len(feedback),
     }
 
-
-@app.get("/products/instock")
-def get_instock_products():
-
-    instock_products = []
-
-    for product in products:
-        if product["in_stock"] == True:
-            instock_products.append(product)
-
-    return {
-        "in_stock_products": instock_products,
-        "count": len(instock_products)
-    }
-
-@app.get("/store/summary")
-def store_summary():
-
+@app.get("/products/summary")
+def product_summary():
     total_products = len(products)
 
-    instock = 0
-    outstock = 0
-    categories = set()
+    in_stock_count = sum(1 for p in products if p["in_stock"])
+    out_of_stock_count = total_products - in_stock_count
 
-    for product in products:
+    # Most expensive product
+    most_expensive_product = max(products, key=lambda x: x["price"])
 
-        categories.add(product["category"])
-
-        if product["in_stock"]:
-            instock += 1
-        else:
-            outstock += 1
-
-    return {
-        "store_name": "My E-commerce Store",
-        "total_products": total_products,
-        "in_stock": instock,
-        "out_of_stock": outstock,
-        "categories": list(categories)
-    }
-
-@app.get("/products/search/{keyword}")
-def search_products(keyword: str):
-
-    matched_products = []
-
-    for product in products:
-        if keyword.lower() in product["name"].lower():
-            matched_products.append(product)
-
-    if len(matched_products) == 0:
-        return {"message": "No products matched your search"}
-
-    return {
-        "matched_products": matched_products,
-        "total_matches": len(matched_products)
-    }
-
-@app.get("/products/deals")
-def product_deals():
-
+    # Cheapest product
     cheapest_product = min(products, key=lambda x: x["price"])
-    expensive_product = max(products, key=lambda x: x["price"])
+
+    # Unique categories
+    categories = list(set(p["category"] for p in products))
 
     return {
-        "best_deal": cheapest_product,
-        "premium_pick": expensive_product
+        "total_products": total_products,
+        "in_stock_count": in_stock_count,
+        "out_of_stock_count": out_of_stock_count,
+        "most_expensive": {
+            "name": most_expensive_product["name"],
+            "price": most_expensive_product["price"]
+        },
+        "cheapest": {
+            "name": cheapest_product["name"],
+            "price": cheapest_product["price"]
+        },
+        "categories": categories
+    }
+
+@app.post("/orders/bulk")
+def place_bulk_order(order: BulkOrder):
+    confirmed = []
+    failed = []
+    grand_total = 0
+
+    for item in order.items:
+        # Find product
+        product = next((p for p in products if p["id"] == item.product_id), None)
+
+        #  Product not found
+        if not product:
+            failed.append({
+                "product_id": item.product_id,
+                "reason": "Product not found"
+            })
+            continue
+
+        #  Out of stock
+        if not product["in_stock"]:
+            failed.append({
+                "product_id": item.product_id,
+                "reason": f"{product['name']} is out of stock"
+            })
+            continue
+
+        #  Valid item
+        subtotal = product["price"] * item.quantity
+        grand_total += subtotal
+
+        confirmed.append({
+            "product": product["name"],
+            "qty": item.quantity,
+            "subtotal": subtotal
+        })
+
+    return {
+        "company": order.company_name,
+        "confirmed": confirmed,
+        "failed": failed,
+        "grand_total": grand_total
     }
